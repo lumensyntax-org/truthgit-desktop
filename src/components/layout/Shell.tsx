@@ -5,6 +5,7 @@ import { GovernancePanel } from '../governance/GovernancePanel';
 import { TruthPanel } from '../truth/TruthPanel';
 import { AgentsPanel } from '../agents/AgentsPanel';
 import { AuditPanel } from '../audit/AuditPanel';
+import { KnowledgePanel } from '../knowledge/KnowledgePanel';
 
 export function Shell() {
   const [currentView, setCurrentView] = useState<View>('governance');
@@ -23,7 +24,7 @@ export function Shell() {
           {currentView === 'agents' && <AgentsPanel />}
           {currentView === 'truth' && <TruthPanel />}
           {currentView === 'audit' && <AuditPanel />}
-          {currentView === 'knowledge' && <PlaceholderView title="Knowledge Base" description="Knowledge browser coming in Phase 5" />}
+          {currentView === 'knowledge' && <KnowledgePanel />}
           {currentView === 'terminal' && <PlaceholderView title="Terminal" description="Integrated terminal coming in Phase 6" />}
           {currentView === 'settings' && <PlaceholderView title="Settings" description="Configuration panel coming soon" />}
         </main>

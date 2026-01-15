@@ -58,6 +58,10 @@ fn get_truth_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join("Almacen_IA/LumenSyntax-Main/.truth"))
 }
 
+fn get_vault_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join("Documents/Obsidian Vault"))
+}
+
 fn decompress_object(path: &PathBuf) -> Result<serde_json::Value, String> {
     let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
 
@@ -336,6 +340,232 @@ async fn add_audit_entry(entry: AuditEntry) -> Result<(), String> {
     Ok(())
 }
 
+// ==================== KNOWLEDGE BASE COMMANDS ====================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VaultFile {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub extension: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VaultNote {
+    pub path: String,
+    pub name: String,
+    pub content: String,
+    pub modified: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub path: String,
+    pub name: String,
+    pub matches: Vec<String>,
+    pub line_numbers: Vec<usize>,
+}
+
+#[tauri::command]
+async fn get_vault_status() -> Result<serde_json::Value, String> {
+    let vault_path = get_vault_path().ok_or("Could not find home directory")?;
+
+    if !vault_path.exists() {
+        return Ok(serde_json::json!({
+            "exists": false,
+            "path": vault_path.to_string_lossy().to_string(),
+            "file_count": 0,
+            "folder_count": 0,
+        }));
+    }
+
+    let mut file_count = 0;
+    let mut folder_count = 0;
+
+    for entry in WalkDir::new(&vault_path)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_type().is_file() {
+            file_count += 1;
+        } else if entry.file_type().is_dir() {
+            folder_count += 1;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "exists": true,
+        "path": vault_path.to_string_lossy().to_string(),
+        "file_count": file_count,
+        "folder_count": folder_count,
+    }))
+}
+
+#[tauri::command]
+async fn list_vault_directory(relative_path: Option<String>) -> Result<Vec<VaultFile>, String> {
+    let vault_path = get_vault_path().ok_or("Could not find home directory")?;
+
+    let target_path = match relative_path {
+        Some(ref p) if !p.is_empty() => vault_path.join(p),
+        _ => vault_path.clone(),
+    };
+
+    if !target_path.exists() {
+        return Err(format!("Directory not found: {}", target_path.display()));
+    }
+
+    let mut files = Vec::new();
+
+    let entries = fs::read_dir(&target_path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?;
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files and .obsidian directory
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let is_dir = path.is_dir();
+        let extension = if is_dir {
+            None
+        } else {
+            path.extension().map(|e| e.to_string_lossy().to_string())
+        };
+
+        let relative = path
+            .strip_prefix(&vault_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| name.clone());
+
+        files.push(VaultFile {
+            name,
+            path: relative,
+            is_dir,
+            extension,
+        });
+    }
+
+    // Sort: directories first, then alphabetically
+    files.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    Ok(files)
+}
+
+#[tauri::command]
+async fn read_note(relative_path: String) -> Result<VaultNote, String> {
+    let vault_path = get_vault_path().ok_or("Could not find home directory")?;
+    let note_path = vault_path.join(&relative_path);
+
+    if !note_path.exists() {
+        return Err(format!("Note not found: {}", relative_path));
+    }
+
+    let content = fs::read_to_string(&note_path)
+        .map_err(|e| format!("Failed to read note: {}", e))?;
+
+    let name = note_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| relative_path.clone());
+
+    let modified = fs::metadata(&note_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(|t| {
+            let datetime: chrono::DateTime<chrono::Utc> = t.into();
+            datetime.to_rfc3339()
+        });
+
+    Ok(VaultNote {
+        path: relative_path,
+        name,
+        content,
+        modified,
+    })
+}
+
+#[tauri::command]
+async fn search_notes(query: String) -> Result<Vec<SearchResult>, String> {
+    let vault_path = get_vault_path().ok_or("Could not find home directory")?;
+
+    if !vault_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    for entry in WalkDir::new(&vault_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let path = entry.path();
+
+        // Only search markdown files
+        if path.extension().map(|e| e != "md").unwrap_or(true) {
+            continue;
+        }
+
+        // Skip .obsidian directory
+        if path.to_string_lossy().contains(".obsidian") {
+            continue;
+        }
+
+        if let Ok(content) = fs::read_to_string(path) {
+            let mut matches = Vec::new();
+            let mut line_numbers = Vec::new();
+
+            for (i, line) in content.lines().enumerate() {
+                if line.to_lowercase().contains(&query_lower) {
+                    // Truncate long lines
+                    let truncated = if line.len() > 100 {
+                        format!("{}...", &line[..100])
+                    } else {
+                        line.to_string()
+                    };
+                    matches.push(truncated);
+                    line_numbers.push(i + 1);
+                }
+            }
+
+            if !matches.is_empty() {
+                let relative = path
+                    .strip_prefix(&vault_path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                results.push(SearchResult {
+                    path: relative,
+                    name,
+                    matches,
+                    line_numbers,
+                });
+            }
+        }
+    }
+
+    // Sort by number of matches (descending)
+    results.sort_by(|a, b| b.matches.len().cmp(&a.matches.len()));
+
+    Ok(results)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -350,6 +580,11 @@ pub fn run() {
             list_verifications,
             get_audit_trail,
             add_audit_entry,
+            // Knowledge Base
+            get_vault_status,
+            list_vault_directory,
+            read_note,
+            search_notes,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
