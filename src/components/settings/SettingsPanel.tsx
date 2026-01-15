@@ -1,30 +1,34 @@
 import { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   Settings,
-  Palette,
   FolderOpen,
   Terminal,
   Shield,
   Save,
   RefreshCw,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 
 interface AppSettings {
-  vaultPath: string;
-  truthRepoPath: string;
-  theme: 'dark' | 'light' | 'system';
-  terminalFontSize: number;
-  defaultRiskProfile: 'low' | 'medium' | 'high';
-  autoSaveAudit: boolean;
+  vault_path: string;
+  truth_repo_path: string;
+  api_mode: 'local' | 'remote';
+  api_url: string;
+  default_risk_profile: 'low' | 'medium' | 'high';
+  terminal_font_size: number;
+  auto_save_audit: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  vaultPath: '~/Documents/Obsidian Vault',
-  truthRepoPath: '~/Almacen_IA/LumenSyntax-Main',
-  theme: 'dark',
-  terminalFontSize: 14,
-  defaultRiskProfile: 'medium',
-  autoSaveAudit: true,
+  vault_path: '~/Documents/Obsidian Vault',
+  truth_repo_path: '~/Almacen_IA/LumenSyntax-Main/.truth',
+  api_mode: 'local',
+  api_url: 'https://truthgit-api-342668283383.us-central1.run.app',
+  default_risk_profile: 'medium',
+  terminal_font_size: 14,
+  auto_save_audit: true,
 };
 
 interface SettingsSectionProps {
@@ -69,7 +73,7 @@ function InputField({ label, value, onChange, placeholder }: InputFieldProps) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500 transition-colors"
+        className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-purple-500 transition-colors font-mono text-sm"
       />
     </div>
   );
@@ -135,6 +139,7 @@ export function SettingsPanel() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -142,13 +147,16 @@ export function SettingsPanel() {
   }, []);
 
   const loadSettings = async () => {
+    setIsLoading(true);
     try {
-      const stored = localStorage.getItem('lumensyntax-settings');
-      if (stored) {
-        setSettings(JSON.parse(stored));
-      }
+      const backendSettings = await invoke<AppSettings>('get_settings');
+      setSettings(backendSettings);
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      console.error('Failed to load settings from backend:', err);
+      // Fallback to defaults
+      setSettings(DEFAULT_SETTINGS);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -160,22 +168,30 @@ export function SettingsPanel() {
   const saveSettings = async () => {
     setIsSaving(true);
     try {
-      localStorage.setItem('lumensyntax-settings', JSON.stringify(settings));
+      await invoke('update_settings', { newSettings: settings });
       setHasChanges(false);
       setSaveMessage('Settings saved successfully');
       setTimeout(() => setSaveMessage(null), 3000);
     } catch (err) {
       console.error('Failed to save settings:', err);
-      setSaveMessage('Failed to save settings');
+      setSaveMessage(`Failed to save: ${err}`);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const resetSettings = () => {
+  const resetSettings = async () => {
     setSettings(DEFAULT_SETTINGS);
     setHasChanges(true);
   };
+
+  if (isLoading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-zinc-500">Loading settings...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -222,6 +238,66 @@ export function SettingsPanel() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-3xl mx-auto space-y-6">
+          {/* API Mode - Local First */}
+          <SettingsSection
+            icon={settings.api_mode === 'local' ? <WifiOff className="w-5 h-5 text-green-400" /> : <Wifi className="w-5 h-5 text-blue-400" />}
+            title="Verification Mode"
+            description="Choose how governance verification is performed"
+          >
+            <div className="space-y-3">
+              <button
+                onClick={() => updateSetting('api_mode', 'local')}
+                className={`w-full p-4 rounded-lg border text-left transition-colors ${
+                  settings.api_mode === 'local'
+                    ? 'border-green-500 bg-green-500/10'
+                    : 'border-zinc-700 hover:border-zinc-600'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <WifiOff className={`w-5 h-5 ${settings.api_mode === 'local' ? 'text-green-400' : 'text-zinc-500'}`} />
+                  <div>
+                    <p className={`font-medium ${settings.api_mode === 'local' ? 'text-green-400' : 'text-zinc-300'}`}>
+                      Local-First (Recommended)
+                    </p>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      Uses local TruthGit CLI. Data stays on your machine. Requires TruthGit installed.
+                    </p>
+                  </div>
+                </div>
+              </button>
+              <button
+                onClick={() => updateSetting('api_mode', 'remote')}
+                className={`w-full p-4 rounded-lg border text-left transition-colors ${
+                  settings.api_mode === 'remote'
+                    ? 'border-blue-500 bg-blue-500/10'
+                    : 'border-zinc-700 hover:border-zinc-600'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Wifi className={`w-5 h-5 ${settings.api_mode === 'remote' ? 'text-blue-400' : 'text-zinc-500'}`} />
+                  <div>
+                    <p className={`font-medium ${settings.api_mode === 'remote' ? 'text-blue-400' : 'text-zinc-300'}`}>
+                      Remote API
+                    </p>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      Uses cloud-hosted TruthGit API. Requires internet connection.
+                    </p>
+                  </div>
+                </div>
+              </button>
+            </div>
+            {settings.api_mode === 'remote' && (
+              <div className="mt-4">
+                <InputField
+                  label="API URL"
+                  value={settings.api_url}
+                  onChange={(v) => updateSetting('api_url', v)}
+                  placeholder="https://truthgit-api-xxx.run.app"
+                />
+              </div>
+            )}
+          </SettingsSection>
+
           {/* Paths */}
           <SettingsSection
             icon={<FolderOpen className="w-5 h-5 text-blue-400" />}
@@ -230,33 +306,15 @@ export function SettingsPanel() {
           >
             <InputField
               label="Obsidian Vault Path"
-              value={settings.vaultPath}
-              onChange={(v) => updateSetting('vaultPath', v)}
+              value={settings.vault_path}
+              onChange={(v) => updateSetting('vault_path', v)}
               placeholder="~/Documents/Obsidian Vault"
             />
             <InputField
-              label="Truth Repository Path"
-              value={settings.truthRepoPath}
-              onChange={(v) => updateSetting('truthRepoPath', v)}
-              placeholder="~/Almacen_IA/LumenSyntax-Main"
-            />
-          </SettingsSection>
-
-          {/* Appearance */}
-          <SettingsSection
-            icon={<Palette className="w-5 h-5 text-purple-400" />}
-            title="Appearance"
-            description="Customize the look and feel"
-          >
-            <SelectField
-              label="Theme"
-              value={settings.theme}
-              onChange={(v) => updateSetting('theme', v as 'dark' | 'light' | 'system')}
-              options={[
-                { value: 'dark', label: 'Dark' },
-                { value: 'light', label: 'Light (Coming Soon)' },
-                { value: 'system', label: 'System' },
-              ]}
+              label="Truth Repository Path (.truth)"
+              value={settings.truth_repo_path}
+              onChange={(v) => updateSetting('truth_repo_path', v)}
+              placeholder="~/Almacen_IA/LumenSyntax-Main/.truth"
             />
           </SettingsSection>
 
@@ -268,8 +326,8 @@ export function SettingsPanel() {
           >
             <SelectField
               label="Font Size"
-              value={settings.terminalFontSize.toString()}
-              onChange={(v) => updateSetting('terminalFontSize', parseInt(v))}
+              value={settings.terminal_font_size.toString()}
+              onChange={(v) => updateSetting('terminal_font_size', parseInt(v))}
               options={[
                 { value: '12', label: '12px' },
                 { value: '14', label: '14px (Default)' },
@@ -277,6 +335,11 @@ export function SettingsPanel() {
                 { value: '18', label: '18px' },
               ]}
             />
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+              <p className="text-sm text-amber-400">
+                Terminal includes dangerous command detection. Potentially harmful commands will show a warning.
+              </p>
+            </div>
           </SettingsSection>
 
           {/* Governance */}
@@ -287,8 +350,8 @@ export function SettingsPanel() {
           >
             <SelectField
               label="Default Risk Profile"
-              value={settings.defaultRiskProfile}
-              onChange={(v) => updateSetting('defaultRiskProfile', v as 'low' | 'medium' | 'high')}
+              value={settings.default_risk_profile}
+              onChange={(v) => updateSetting('default_risk_profile', v as 'low' | 'medium' | 'high')}
               options={[
                 { value: 'low', label: 'Low - More permissive' },
                 { value: 'medium', label: 'Medium - Balanced (Default)' },
@@ -298,8 +361,8 @@ export function SettingsPanel() {
             <ToggleField
               label="Auto-save Audit Entries"
               description="Automatically save all verification results to the audit log"
-              value={settings.autoSaveAudit}
-              onChange={(v) => updateSetting('autoSaveAudit', v)}
+              value={settings.auto_save_audit}
+              onChange={(v) => updateSetting('auto_save_audit', v)}
             />
           </SettingsSection>
 
@@ -307,13 +370,18 @@ export function SettingsPanel() {
           <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-6 text-center">
             <p className="text-zinc-400 text-sm mb-2">LumenSyntax Desktop</p>
             <p className="text-2xl font-light text-zinc-200 mb-1">v0.1.0</p>
-            <p className="text-xs text-zinc-600">Phase 6 - Terminal & Settings</p>
+            <p className="text-xs text-zinc-600">Phase 6 Complete - Local-First Architecture</p>
             <div className="mt-4 flex items-center justify-center gap-4 text-xs text-zinc-500">
-              <span>Built with Tauri 2.0</span>
+              <span>Tauri 2.0</span>
               <span>•</span>
               <span>React 19</span>
               <span>•</span>
               <span>xterm.js</span>
+              <span>•</span>
+              <span>TruthGit</span>
+            </div>
+            <div className="mt-3 text-xs text-green-500">
+              {settings.api_mode === 'local' ? '🔒 Local-First Mode Active' : '☁️ Remote API Mode'}
             </div>
           </div>
         </div>

@@ -4,7 +4,82 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::RwLock;
 use walkdir::WalkDir;
+
+// ==================== APP SETTINGS (CONFIGURABLE) ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub vault_path: String,
+    pub truth_repo_path: String,
+    pub api_mode: String,  // "remote" or "local"
+    pub api_url: String,
+    pub default_risk_profile: String,
+    pub terminal_font_size: u32,
+    pub auto_save_audit: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        let home = dirs::home_dir().unwrap_or_default();
+        Self {
+            vault_path: home.join("Documents/Obsidian Vault").to_string_lossy().to_string(),
+            truth_repo_path: home.join("Almacen_IA/LumenSyntax-Main/.truth").to_string_lossy().to_string(),
+            api_mode: "local".to_string(),  // LOCAL-FIRST by default
+            api_url: "https://truthgit-api-342668283383.us-central1.run.app".to_string(),
+            default_risk_profile: "medium".to_string(),
+            terminal_font_size: 14,
+            auto_save_audit: true,
+        }
+    }
+}
+
+// Global settings (thread-safe)
+static SETTINGS: std::sync::LazyLock<RwLock<AppSettings>> = std::sync::LazyLock::new(|| {
+    RwLock::new(load_settings_from_file().unwrap_or_default())
+});
+
+fn get_settings_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("lumensyntax")
+        .join("settings.json")
+}
+
+fn load_settings_from_file() -> Option<AppSettings> {
+    let path = get_settings_path();
+    if path.exists() {
+        let content = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&content).ok()
+    } else {
+        None
+    }
+}
+
+fn save_settings_to_file(settings: &AppSettings) -> Result<(), String> {
+    let path = get_settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    fs::write(&path, content).map_err(|e| format!("Failed to write settings: {}", e))
+}
+
+#[tauri::command]
+async fn get_settings() -> Result<AppSettings, String> {
+    let settings = SETTINGS.read().map_err(|e| format!("Lock error: {}", e))?;
+    Ok(settings.clone())
+}
+
+#[tauri::command]
+async fn update_settings(new_settings: AppSettings) -> Result<(), String> {
+    save_settings_to_file(&new_settings)?;
+    let mut settings = SETTINGS.write().map_err(|e| format!("Lock error: {}", e))?;
+    *settings = new_settings;
+    Ok(())
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GovernanceResult {
@@ -55,11 +130,17 @@ pub struct TruthRepoStatus {
 }
 
 fn get_truth_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("Almacen_IA/LumenSyntax-Main/.truth"))
+    // Use configurable path from settings
+    let settings = SETTINGS.read().ok()?;
+    let path = PathBuf::from(&settings.truth_repo_path);
+    Some(path)
 }
 
 fn get_vault_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("Documents/Obsidian Vault"))
+    // Use configurable path from settings
+    let settings = SETTINGS.read().ok()?;
+    let path = PathBuf::from(&settings.vault_path);
+    Some(path)
 }
 
 fn decompress_object(path: &PathBuf) -> Result<serde_json::Value, String> {
@@ -81,10 +162,19 @@ async fn governance_verify(
     domain: String,
     risk_profile: String,
 ) -> Result<GovernanceResult, String> {
-    let client = reqwest::Client::new();
+    // Read settings in a block to ensure lock is released before any await
+    let (api_mode, api_url) = {
+        let settings = SETTINGS.read().map_err(|e| format!("Settings lock error: {}", e))?;
+        (settings.api_mode.clone(), settings.api_url.clone())
+    };
 
-    let api_url = std::env::var("TRUTHGIT_API_URL")
-        .unwrap_or_else(|_| "https://truthgit-api-342668283383.us-central1.run.app".to_string());
+    // LOCAL-FIRST: Use TruthGit CLI when api_mode is "local"
+    if api_mode == "local" {
+        return governance_verify_local(&claim, &domain, &risk_profile).await;
+    }
+
+    // Remote API mode
+    let client = reqwest::Client::new();
 
     let response = client
         .post(format!("{}/api/governance/verify", api_url))
@@ -106,6 +196,50 @@ async fn governance_verify(
         Ok(data)
     } else {
         Err(result.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
+
+// Local governance verification using TruthGit CLI
+async fn governance_verify_local(claim: &str, domain: &str, risk_profile: &str) -> Result<GovernanceResult, String> {
+    let output = Command::new("truthgit")
+        .args(["safe-verify", claim, "--domain", domain, "--risk", risk_profile, "--json"])
+        .output()
+        .map_err(|e| format!("Failed to run truthgit CLI: {}. Is TruthGit installed?", e))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse JSON output from TruthGit CLI
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .map_err(|e| format!("Failed to parse TruthGit output: {}", e))?;
+
+        Ok(GovernanceResult {
+            status: parsed.get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("UNKNOWN")
+                .to_string(),
+            action: parsed.get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("escalate")
+                .to_string(),
+            confidence: parsed.get("confidence")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0),
+            reason: parsed.get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Local verification completed")
+                .to_string(),
+            audit_ref: parsed.get("audit_ref")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            ontological_type: parsed.get("ontological_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        })
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("TruthGit verification failed: {}", stderr))
     }
 }
 
@@ -576,6 +710,49 @@ pub struct ShellOutput {
     pub success: bool,
 }
 
+// Dangerous command patterns that require extra caution
+const DANGEROUS_PATTERNS: &[&str] = &[
+    "rm -rf",
+    "rm -r /",
+    "sudo rm",
+    "> /dev/",
+    "mkfs",
+    "dd if=",
+    ":(){:|:&};:",  // Fork bomb
+    "chmod -R 777",
+    "curl | bash",
+    "wget | bash",
+    "eval $(",
+];
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandCheck {
+    pub is_dangerous: bool,
+    pub warning: Option<String>,
+}
+
+#[tauri::command]
+async fn check_command_safety(command: String) -> Result<CommandCheck, String> {
+    let cmd_lower = command.to_lowercase();
+
+    for pattern in DANGEROUS_PATTERNS {
+        if cmd_lower.contains(pattern) {
+            return Ok(CommandCheck {
+                is_dangerous: true,
+                warning: Some(format!(
+                    "⚠️ This command contains '{}' which can be dangerous. Proceed with caution.",
+                    pattern
+                )),
+            });
+        }
+    }
+
+    Ok(CommandCheck {
+        is_dangerous: false,
+        warning: None,
+    })
+}
+
 #[tauri::command]
 async fn execute_shell(command: String, cwd: Option<String>) -> Result<ShellOutput, String> {
     let shell = if cfg!(target_os = "windows") {
@@ -590,9 +767,17 @@ async fn execute_shell(command: String, cwd: Option<String>) -> Result<ShellOutp
         "-c"
     };
 
+    // Use configurable working directory from settings
     let working_dir = cwd.unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join("Almacen_IA/LumenSyntax-Main").to_string_lossy().to_string())
+        SETTINGS.read()
+            .ok()
+            .map(|s| {
+                // Use truth_repo_path parent directory as default working dir
+                PathBuf::from(&s.truth_repo_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| ".".to_string())
+            })
             .unwrap_or_else(|| ".".to_string())
     });
 
@@ -650,6 +835,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            // Settings
+            get_settings,
+            update_settings,
+            // Governance
             governance_verify,
             list_claims,
             get_claim,
@@ -657,6 +846,7 @@ pub fn run() {
             run_truthgit_command,
             verify_claim_local,
             list_verifications,
+            // Audit
             get_audit_trail,
             add_audit_entry,
             // Knowledge Base
@@ -665,6 +855,7 @@ pub fn run() {
             read_note,
             search_notes,
             // Terminal
+            check_command_safety,
             execute_shell,
             get_shell_suggestions,
         ])
