@@ -1906,25 +1906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumensyntax-desktop"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs 5.0.1",
- "flate2",
- "log",
- "reqwest",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "tauri-plugin-shell",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4436,6 +4417,25 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "truthgit-desktop"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "dirs 5.0.1",
+ "flate2",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "tauri-plugin-shell",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]

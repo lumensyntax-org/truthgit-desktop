@@ -23,10 +23,17 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_default();
+
+        // Use standard XDG-like paths that work for any user
+        // Users should configure these in Settings on first run
         Self {
-            vault_path: home.join("Documents/Obsidian Vault").to_string_lossy().to_string(),
-            truth_repo_path: home.join("Almacen_IA/LumenSyntax-Main/.truth").to_string_lossy().to_string(),
-            api_mode: "local".to_string(),  // LOCAL-FIRST by default
+            // Default: ~/Documents/Obsidian (common location)
+            vault_path: home.join("Documents/Obsidian").to_string_lossy().to_string(),
+            // Default: ~/.truth (standard location in home directory)
+            truth_repo_path: home.join(".truth").to_string_lossy().to_string(),
+            // LOCAL-FIRST by default - no remote API calls unless explicitly enabled
+            api_mode: "local".to_string(),
+            // Remote API URL (only used if api_mode is "remote")
             api_url: "https://truthgit-api-342668283383.us-central1.run.app".to_string(),
             default_risk_profile: "medium".to_string(),
             terminal_font_size: 14,
@@ -348,8 +355,74 @@ async fn get_truth_status() -> Result<TruthRepoStatus, String> {
     })
 }
 
+// Allowed TruthGit subcommands (whitelist)
+const ALLOWED_TRUTHGIT_SUBCOMMANDS: &[&str] = &[
+    "status",
+    "verify",
+    "safe-verify",
+    "prove",
+    "search",
+    "log",
+    "show",
+    "list",
+    "version",
+    "--version",
+    "--help",
+    "help",
+];
+
+// Blocked argument patterns for TruthGit
+const BLOCKED_ARG_PATTERNS: &[&str] = &[
+    ";",
+    "&&",
+    "||",
+    "|",
+    "`",
+    "$(",
+    "${",
+    ">",
+    "<",
+    "\n",
+    "\r",
+];
+
+fn validate_truthgit_args(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err("No subcommand provided".to_string());
+    }
+
+    // First arg must be an allowed subcommand
+    let subcommand = &args[0];
+    if !ALLOWED_TRUTHGIT_SUBCOMMANDS.contains(&subcommand.as_str()) {
+        return Err(format!(
+            "🚫 BLOCKED: TruthGit subcommand '{}' is not allowed. \
+            Allowed: {:?}",
+            subcommand, ALLOWED_TRUTHGIT_SUBCOMMANDS
+        ));
+    }
+
+    // Check all args for injection patterns
+    for arg in args {
+        for pattern in BLOCKED_ARG_PATTERNS {
+            if arg.contains(pattern) {
+                return Err(format!(
+                    "🚫 BLOCKED: Argument contains forbidden pattern '{}'. \
+                    Shell injection attempt detected.",
+                    pattern
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn run_truthgit_command(args: Vec<String>) -> Result<String, String> {
+    // ====== SECURITY: Validate args before execution ======
+    validate_truthgit_args(&args)?;
+    // ====== END SECURITY CHECK ======
+
     let output = Command::new("truthgit")
         .args(&args)
         .output()
@@ -710,19 +783,67 @@ pub struct ShellOutput {
     pub success: bool,
 }
 
-// Dangerous command patterns that require extra caution
+// Dangerous command patterns - BLOCKED server-side
 const DANGEROUS_PATTERNS: &[&str] = &[
-    "rm -rf",
+    "rm -rf /",
     "rm -r /",
-    "sudo rm",
-    "> /dev/",
+    "sudo rm -rf",
+    "> /dev/sd",
+    "> /dev/null",  // Allow this one - it's safe, will be excluded below
     "mkfs",
     "dd if=",
     ":(){:|:&};:",  // Fork bomb
-    "chmod -R 777",
+    "chmod -R 777 /",
     "curl | bash",
+    "curl|bash",
     "wget | bash",
+    "wget|bash",
     "eval $(",
+    "$(curl",
+    "$(wget",
+    "; rm ",
+    "&& rm -rf",
+    "| rm ",
+    "`rm ",
+    "sudo su",
+    "sudo -i",
+    "sudo bash",
+];
+
+// Allowed command prefixes for shell execution (whitelist approach)
+const ALLOWED_COMMAND_PREFIXES: &[&str] = &[
+    "truthgit",
+    "ls",
+    "pwd",
+    "cat ",
+    "head ",
+    "tail ",
+    "grep ",
+    "find ",
+    "echo ",
+    "cd ",
+    "git status",
+    "git log",
+    "git diff",
+    "git branch",
+    "git show",
+    "pip list",
+    "pip show",
+    "python --version",
+    "node --version",
+    "npm list",
+    "cargo --version",
+    "rustc --version",
+    "which ",
+    "whereis ",
+    "file ",
+    "wc ",
+    "date",
+    "whoami",
+    "hostname",
+    "uname",
+    "env",
+    "printenv",
 ];
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -731,20 +852,57 @@ pub struct CommandCheck {
     pub warning: Option<String>,
 }
 
-#[tauri::command]
-async fn check_command_safety(command: String) -> Result<CommandCheck, String> {
+// Check if command is in the whitelist
+fn is_command_allowed(command: &str) -> bool {
+    let cmd_trimmed = command.trim();
+
+    for prefix in ALLOWED_COMMAND_PREFIXES {
+        if cmd_trimmed.starts_with(prefix) || cmd_trimmed == prefix.trim() {
+            return true;
+        }
+    }
+    false
+}
+
+// Check if command contains dangerous patterns
+fn contains_dangerous_pattern(command: &str) -> Option<&'static str> {
     let cmd_lower = command.to_lowercase();
+
+    // Special case: allow > /dev/null (it's safe)
+    if cmd_lower.contains("> /dev/null") {
+        return None;
+    }
 
     for pattern in DANGEROUS_PATTERNS {
         if cmd_lower.contains(pattern) {
-            return Ok(CommandCheck {
-                is_dangerous: true,
-                warning: Some(format!(
-                    "⚠️ This command contains '{}' which can be dangerous. Proceed with caution.",
-                    pattern
-                )),
-            });
+            return Some(pattern);
         }
+    }
+    None
+}
+
+#[tauri::command]
+async fn check_command_safety(command: String) -> Result<CommandCheck, String> {
+    // First check for dangerous patterns
+    if let Some(pattern) = contains_dangerous_pattern(&command) {
+        return Ok(CommandCheck {
+            is_dangerous: true,
+            warning: Some(format!(
+                "🚫 BLOCKED: Command contains dangerous pattern '{}'",
+                pattern
+            )),
+        });
+    }
+
+    // Then check if command is in whitelist
+    if !is_command_allowed(&command) {
+        return Ok(CommandCheck {
+            is_dangerous: true,
+            warning: Some(format!(
+                "⚠️ Command '{}' is not in the allowed list. Only safe commands are permitted.",
+                command.split_whitespace().next().unwrap_or(&command)
+            )),
+        });
     }
 
     Ok(CommandCheck {
@@ -755,6 +913,25 @@ async fn check_command_safety(command: String) -> Result<CommandCheck, String> {
 
 #[tauri::command]
 async fn execute_shell(command: String, cwd: Option<String>) -> Result<ShellOutput, String> {
+    // ====== SECURITY: Server-side enforcement ======
+    // Check for dangerous patterns FIRST
+    if let Some(pattern) = contains_dangerous_pattern(&command) {
+        return Err(format!(
+            "🚫 BLOCKED: Command contains dangerous pattern '{}'. Execution denied.",
+            pattern
+        ));
+    }
+
+    // Check if command is in whitelist
+    if !is_command_allowed(&command) {
+        return Err(format!(
+            "🚫 BLOCKED: Command '{}' is not in the allowed list. \
+            Only truthgit and safe read-only commands are permitted.",
+            command.split_whitespace().next().unwrap_or(&command)
+        ));
+    }
+    // ====== END SECURITY CHECK ======
+
     let shell = if cfg!(target_os = "windows") {
         "cmd"
     } else {
