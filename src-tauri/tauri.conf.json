@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "LumenSyntax",
-  "version": "0.1.0",
-  "identifier": "com.lumensyntax.desktop",
+  "productName": "TruthGit",
+  "version": "0.2.0",
+  "identifier": "com.truthgit.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LumenSyntax - Governance Layer for AI",
+        "title": "TruthGit - Governance Layer for AI",
         "width": 1200,
         "height": 800,
         "minWidth": 900,

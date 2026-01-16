@@ -1,8 +1,8 @@
-# LumenSyntax Desktop
+# TruthGit Desktop
 
 > Local-first governance layer for AI ecosystems
 
-A Tauri-based desktop application that provides a unified interface for the LumenSyntax ecosystem, enabling governance verification, truth tracking, and agent management.
+A Tauri-based desktop application that provides a unified interface for TruthGit, enabling governance verification, truth tracking, and agent management.
 
 ## Features
 
@@ -20,7 +20,7 @@ A Tauri-based desktop application that provides a unified interface for the Lume
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   LumenSyntax Desktop                    │
+│                    TruthGit Desktop                     │
 ├─────────────────────────────────────────────────────────┤
 │  React 19 + TypeScript + Tailwind CSS 4                 │
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐       │
@@ -50,14 +50,14 @@ A Tauri-based desktop application that provides a unified interface for the Lume
 
 ### From Release
 
-Download from [Releases](https://github.com/lumensyntax-org/lumensyntax-desktop/releases):
+Download from [Releases](https://github.com/lumensyntax-org/truthgit-desktop/releases):
 
 ```bash
 # Ubuntu/Debian
-sudo dpkg -i LumenSyntax_0.1.0_amd64.deb
+sudo dpkg -i TruthGit_0.2.0_amd64.deb
 
 # Fedora/RHEL
-sudo rpm -i LumenSyntax-0.1.0-1.x86_64.rpm
+sudo rpm -i TruthGit-0.2.0-1.x86_64.rpm
 ```
 
 ### Requirements
@@ -80,8 +80,8 @@ sudo rpm -i LumenSyntax-0.1.0-1.x86_64.rpm
 sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
 
 # Clone and build
-git clone https://github.com/lumensyntax-org/lumensyntax-desktop.git
-cd lumensyntax-desktop
+git clone https://github.com/lumensyntax-org/truthgit-desktop.git
+cd truthgit-desktop
 npm install
 npm run tauri build
 ```
@@ -104,7 +104,7 @@ npm run build
 
 ## Configuration
 
-Settings are stored in `~/.config/lumensyntax/settings.json`:
+Settings are stored in `~/.config/truthgit/settings.json`:
 
 ```json
 {
@@ -139,5 +139,6 @@ MIT
 
 ## Links
 
-- [TruthGit](https://pypi.org/project/truthgit/) - Truth verification system
-- [LumenSyntax](https://github.com/lumensyntax-org) - Main organization
+- [TruthGit CLI](https://pypi.org/project/truthgit/) - Truth verification system
+- [truthgit.com](https://truthgit.com) - Web interface
+- [LumenSyntax](https://lumensyntax.com) - Ecosystem documentation

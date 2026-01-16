@@ -43,7 +43,7 @@ static SETTINGS: std::sync::LazyLock<RwLock<AppSettings>> = std::sync::LazyLock:
 fn get_settings_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("lumensyntax")
+        .join("truthgit")
         .join("settings.json")
 }
 

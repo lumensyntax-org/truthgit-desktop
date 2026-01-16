@@ -1,6 +1,21 @@
 # Changelog
 
-All notable changes to LumenSyntax Desktop will be documented in this file.
+All notable changes to TruthGit Desktop will be documented in this file.
+
+## [0.2.0] - 2026-01-16
+
+### Changed
+
+- **Rebranding**: Renamed from "LumenSyntax Desktop" to "TruthGit Desktop"
+  - Product name: TruthGit
+  - App identifier: com.truthgit.desktop
+  - Config directory: ~/.config/truthgit/
+  - All UI references updated
+
+- **Clarified Product Architecture**:
+  - TruthGit Desktop = The main product (local-first)
+  - truthgit.com = Landing page + download
+  - lumensyntax.com = Ecosystem documentation
 
 ## [0.1.0] - 2026-01-15
 
@@ -49,7 +64,7 @@ All notable changes to LumenSyntax Desktop will be documented in this file.
   - Terminal font size selection
   - Default risk profile setting
   - Auto-save audit toggle
-  - Persistent configuration (`~/.config/lumensyntax/`)
+  - Persistent configuration
 
 ### Architecture
 
@@ -69,5 +84,6 @@ All notable changes to LumenSyntax Desktop will be documented in this file.
 
 ## Links
 
-- [Release v0.1.0](https://github.com/lumensyntax-org/lumensyntax-desktop/releases/tag/v0.1.0)
+- [Release v0.2.0](https://github.com/lumensyntax-org/truthgit-desktop/releases/tag/v0.2.0)
 - [TruthGit on PyPI](https://pypi.org/project/truthgit/)
+- [truthgit.com](https://truthgit.com)

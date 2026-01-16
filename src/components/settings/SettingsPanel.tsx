@@ -203,7 +203,7 @@ export function SettingsPanel() {
           </div>
           <div>
             <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
-            <p className="text-xs text-zinc-500">Configure LumenSyntax Desktop</p>
+            <p className="text-xs text-zinc-500">Configure TruthGit Desktop</p>
           </div>
         </div>
 
@@ -368,8 +368,8 @@ export function SettingsPanel() {
 
           {/* Version Info */}
           <div className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-6 text-center">
-            <p className="text-zinc-400 text-sm mb-2">LumenSyntax Desktop</p>
-            <p className="text-2xl font-light text-zinc-200 mb-1">v0.1.0</p>
+            <p className="text-zinc-400 text-sm mb-2">TruthGit Desktop</p>
+            <p className="text-2xl font-light text-zinc-200 mb-1">v0.2.0</p>
             <p className="text-xs text-zinc-600">Phase 6 Complete - Local-First Architecture</p>
             <div className="mt-4 flex items-center justify-center gap-4 text-xs text-zinc-500">
               <span>Tauri 2.0</span>

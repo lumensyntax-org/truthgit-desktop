@@ -46,7 +46,7 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
             animate={{ opacity: 1 }}
             className="text-sm font-medium text-white/80"
           >
-            LumenSyntax
+            TruthGit
           </motion.span>
         )}
       </div>

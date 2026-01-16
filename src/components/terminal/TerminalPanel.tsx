@@ -14,7 +14,7 @@ interface ShellOutput {
 }
 
 const WELCOME_MESSAGE = `\x1b[1;35m╔══════════════════════════════════════════════════════════╗
-║         LumenSyntax Terminal - Governance Layer           ║
+║           TruthGit Terminal - Governance Layer            ║
 ╚══════════════════════════════════════════════════════════╝\x1b[0m
 
 \x1b[90mType commands to interact with the ecosystem.
@@ -22,7 +22,7 @@ Quick commands: truthgit status, truthgit verify "claim"\x1b[0m
 
 `;
 
-const PROMPT = '\x1b[1;36mlumen\x1b[0m:\x1b[1;34m~\x1b[0m$ ';
+const PROMPT = '\x1b[1;36mtruthgit\x1b[0m:\x1b[1;34m~\x1b[0m$ ';
 
 export function TerminalPanel() {
   const terminalRef = useRef<HTMLDivElement>(null);
